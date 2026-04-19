@@ -1,10 +1,10 @@
 venv/
 __pycache__/
 *.pyc
-.env
-chroma_db/
-uploaded_docs/
-*.db
 node_modules/
 frontend/build/
+chroma_db/
+uploaded_docs/
+.env
+*.db
 efhu
