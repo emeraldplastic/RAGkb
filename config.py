@@ -21,9 +21,9 @@ CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploaded_docs")
 
 # ── Models ────────────────────────────────────────────────
-EMBED_MODEL = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 # ── RAG Settings ──────────────────────────────────────────
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1200"))

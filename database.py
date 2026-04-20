@@ -4,8 +4,6 @@ Users can only see and query their own documents.
 """
 
 import sqlite3
-import os
-from datetime import datetime
 from config import DATABASE_PATH
 
 
@@ -13,6 +11,9 @@ def get_connection():
     """Get a SQLite connection with row_factory for dict-like access."""
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA temp_store = MEMORY")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -44,6 +45,16 @@ def init_db():
             uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_user_uploaded
+        ON documents(user_id, uploaded_at DESC)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_user_filename
+        ON documents(user_id, filename)
     """)
 
     conn.commit()
@@ -104,6 +115,24 @@ def add_document(user_id: int, filename: str, original_name: str,
     doc_id = cursor.lastrowid
     conn.close()
     return doc_id
+
+
+def update_document_stats(doc_id: int, user_id: int, page_count: int, chunk_count: int) -> bool:
+    """Update processed page/chunk counts for a document that belongs to the user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE documents
+        SET page_count = ?, chunk_count = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (page_count, chunk_count, doc_id, user_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def get_user_documents(user_id: int) -> list[dict]:

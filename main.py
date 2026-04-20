@@ -6,14 +6,13 @@ Provides authenticated, per-user document upload, search, and chat.
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 import json
+from functools import lru_cache
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.llms import Ollama
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.document_loaders import PDFPlumberLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -24,7 +23,7 @@ from datetime import datetime
 
 from config import (
     CHROMA_PATH, EMBED_MODEL, UPLOAD_DIR, LLM_MODEL,
-    OLLAMA_BASE_URL, CHUNK_SIZE, CHUNK_OVERLAP, RETRIEVER_K
+    OPENAI_BASE_URL, CHUNK_SIZE, CHUNK_OVERLAP, RETRIEVER_K
 )
 from auth import hash_password, verify_password, create_access_token, get_current_user
 import database as db
@@ -34,7 +33,38 @@ import database as db
 db.init_db()
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+embeddings = OpenAIEmbeddings(
+    model=EMBED_MODEL,
+    base_url=OPENAI_BASE_URL,
+)
+llm = ChatOpenAI(
+    model=LLM_MODEL,
+    base_url=OPENAI_BASE_URL,
+    temperature=0,
+)
+
+prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template="""You are an intelligent assistant. Use ONLY the provided context to answer the question.
+If the answer is not in the context, say "I don't have enough information to answer that based on your documents."
+Be precise, helpful, and cite specific details from the context when possible.
+
+Context:
+{context}
+
+Question:
+{question}
+
+Answer:""",
+)
+
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP,
+    separators=["\n\n", "\n", ". ", " ", ""],
+)
+response_parser = StrOutputParser()
+rag_generation_chain = prompt | llm | response_parser
 
 app = FastAPI(title="RAG Knowledge Base", version="2.0.0")
 
@@ -77,6 +107,7 @@ def get_user_upload_dir(user_id: int) -> str:
     return path
 
 
+@lru_cache(maxsize=64)
 def get_user_db(user_id: int) -> Chroma:
     """Get a ChromaDB instance scoped to a specific user."""
     return Chroma(
@@ -86,41 +117,13 @@ def get_user_db(user_id: int) -> Chroma:
     )
 
 
-def build_chain(retriever):
-    """Build the RAG chain with the given retriever."""
-    llm = Ollama(model=LLM_MODEL, base_url=OLLAMA_BASE_URL)
-
-    prompt_template = """You are an intelligent assistant. Use ONLY the provided context to answer the question.
-If the answer is not in the context, say "I don't have enough information to answer that based on your documents."
-Be precise, helpful, and cite specific details from the context when possible.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:"""
-
-    prompt = PromptTemplate(
-        input_variables=["context", "question"],
-        template=prompt_template,
+def format_docs(docs) -> str:
+    """Format retrieved docs into a compact context block for the model."""
+    return "\n\n---\n\n".join(
+        f"[Source: {doc.metadata.get('original_name', 'unknown')} | "
+        f"Page {doc.metadata.get('page', 'N/A')}]\n{doc.page_content}"
+        for doc in docs
     )
-
-    def format_docs(docs):
-        return "\n\n---\n\n".join(
-            f"[Source: {doc.metadata.get('original_name', 'unknown')} | "
-            f"Page {doc.metadata.get('page', 'N/A')}]\n{doc.page_content}"
-            for doc in docs
-        )
-
-    chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    return chain
 
 
 def load_document(file_path: str, ext: str):
@@ -189,6 +192,8 @@ def upload_document(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
+    user_id = user["id"]
+    original_name = file.filename
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -197,7 +202,7 @@ def upload_document(
         )
 
     # Save file to user's upload directory immediately
-    user_dir = get_user_upload_dir(user["id"])
+    user_dir = get_user_upload_dir(user_id)
     safe_filename = f"{uuid.uuid4().hex}{ext}"
     file_path = os.path.join(user_dir, safe_filename)
 
@@ -208,9 +213,9 @@ def upload_document(
 
     # Insert a placeholder record in SQLite so the UI can list it immediately
     doc_id = db.add_document(
-        user_id=user["id"],
+        user_id=user_id,
         filename=safe_filename,
-        original_name=file.filename,
+        original_name=original_name,
         file_type=ext,
         page_count=0,
         chunk_count=0,
@@ -224,38 +229,37 @@ def upload_document(
         except Exception:
             return  # Could log error here
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
-            separators=["\n\n", "\n", ". ", " ", ""],
-        )
-        chunks = splitter.split_documents(pages)
+        chunks = text_splitter.split_documents(pages)
 
         if not chunks:
             return
 
         for chunk in chunks:
-            chunk.metadata["user_id"] = user["id"]
-            chunk.metadata["original_name"] = file.filename
+            chunk.metadata["user_id"] = user_id
+            chunk.metadata["original_name"] = original_name
             chunk.metadata["stored_filename"] = safe_filename
             chunk.metadata["uploaded_at"] = datetime.utcnow().isoformat()
 
-        # Add to ChromaDB
-        user_db = get_user_db(user["id"])
-        user_db.add_documents(chunks)
-        
-        # Note: In a production app, we would update the SQLite db.add_document
-        # totals (page counts, chunks) here using an UPDATE query. Right now,
-        # keeping it 0 is a telltale sign it's still processing or we just leave it.
+        try:
+            user_db = get_user_db(user_id)
+            user_db.add_documents(chunks)
+            db.update_document_stats(
+                doc_id=doc_id,
+                user_id=user_id,
+                page_count=len(pages),
+                chunk_count=len(chunks),
+            )
+        except Exception:
+            return
 
     # Queue the heavy LangChain work
     background_tasks.add_task(process_file_in_background)
 
     return {
-        "message": f"Successfully queued '{file.filename}' for processing",
+        "message": f"Successfully queued '{original_name}' for processing",
         "document": {
             "id": doc_id,
-            "name": file.filename,
+            "name": original_name,
             "pages": 0,
             "chunks": 0,
             "size": file_size,
@@ -343,11 +347,10 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         search_kwargs["filter"] = {"stored_filename": doc["filename"]}
 
     retriever = user_db.as_retriever(search_kwargs=search_kwargs)
-    chain = build_chain(retriever)
 
     def generate():
         try:
-            # 1. Fetch source doc metadata
+            # Fetch once and reuse for both source chips and model context.
             source_docs = retriever.invoke(request.question)
             sources = []
             seen = set()
@@ -358,12 +361,13 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
                 if key not in seen:
                     seen.add(key)
                     sources.append({"name": name, "page": page})
-            
-            # Send initial sources payload
+
             yield json.dumps({"type": "sources", "data": sources}) + "\n"
 
-            # 2. Stream generation
-            for chunk in chain.stream(request.question):
+            context = format_docs(source_docs)
+            for chunk in rag_generation_chain.stream(
+                {"context": context, "question": request.question}
+            ):
                 yield json.dumps({"type": "token", "data": chunk}) + "\n"
         except Exception as e:
             yield json.dumps({"type": "error", "data": str(e)}) + "\n"

@@ -2,7 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
+const API =
+  process.env.REACT_APP_API_URL ||
+  (window.location.hostname === "localhost" ? "http://127.0.0.1:8000" : "");
+const STREAM_FLUSH_INTERVAL_MS = 50;
+const MAX_CONCURRENT_UPLOADS = 3;
 
 // ── Axios instance with auth header ─────────────────────
 const api = axios.create({ baseURL: API });
@@ -124,6 +128,10 @@ function MainApp({ user, onLogout }) {
   const [showDropdown, setShowDropdown] = useState(false);
   const bottomRef = useRef(null);
   const dropdownRef = useRef(null);
+  const streamBufferRef = useRef("");
+  const streamTextRef = useRef("");
+  const streamSourcesRef = useRef([]);
+  const streamFlushTimerRef = useRef(null);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -138,9 +146,61 @@ function MainApp({ user, onLogout }) {
     fetchDocuments();
   }, [fetchDocuments]);
 
+  const scrollToBottom = useCallback((behavior = "auto") => {
+    bottomRef.current?.scrollIntoView({ behavior });
+  }, []);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    scrollToBottom("smooth");
+  }, [messages.length, scrollToBottom]);
+
+  const flushAssistantMessage = useCallback(() => {
+    setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const lastIndex = prev.length - 1;
+      const last = prev[lastIndex];
+      if (last.role !== "assistant") return prev;
+
+      const updated = {
+        ...last,
+        text: streamTextRef.current,
+        sources: streamSourcesRef.current,
+      };
+      const next = [...prev];
+      next[lastIndex] = updated;
+      return next;
+    });
+    scrollToBottom("auto");
+  }, [scrollToBottom]);
+
+  const scheduleAssistantFlush = useCallback(
+    (immediate = false) => {
+      if (immediate) {
+        if (streamFlushTimerRef.current) {
+          clearTimeout(streamFlushTimerRef.current);
+          streamFlushTimerRef.current = null;
+        }
+        flushAssistantMessage();
+        return;
+      }
+
+      if (streamFlushTimerRef.current) return;
+      streamFlushTimerRef.current = setTimeout(() => {
+        streamFlushTimerRef.current = null;
+        flushAssistantMessage();
+      }, STREAM_FLUSH_INTERVAL_MS);
+    },
+    [flushAssistantMessage]
+  );
+
+  useEffect(
+    () => () => {
+      if (streamFlushTimerRef.current) {
+        clearTimeout(streamFlushTimerRef.current);
+      }
+    },
+    []
+  );
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -154,35 +214,50 @@ function MainApp({ user, onLogout }) {
   }, []);
 
   const uploadFile = async (e) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
     setUploading(true);
 
     let successCount = 0;
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+    let currentIndex = 0;
+
+    const worker = async () => {
+      while (currentIndex < files.length) {
+        const file = files[currentIndex];
+        currentIndex += 1;
+
         const formData = new FormData();
         formData.append("file", file);
 
         try {
-            await api.post("/api/upload", formData);
-            successCount++;
+          await api.post("/api/upload", formData);
+          successCount += 1;
         } catch (err) {
-            console.error("Upload failed for", file.name, err);
+          console.error("Upload failed for", file.name, err);
         }
-    }
+      }
+    };
 
-    await fetchDocuments();
-    setMessages((prev) => [
+    try {
+      await Promise.all(
+        Array.from(
+          { length: Math.min(MAX_CONCURRENT_UPLOADS, files.length) },
+          () => worker()
+        )
+      );
+      await fetchDocuments();
+      setMessages((prev) => [
         ...prev,
         {
-            role: "system",
-            text: `📄 Uploaded ${successCount}/${files.length} document(s)`
+          role: "system",
+          text: `Uploaded ${successCount}/${files.length} document(s)`,
         },
-    ]);
-    
-    e.target.value = "";
-    setUploading(false);
+      ]);
+      scrollToBottom("smooth");
+    } finally {
+      e.target.value = "";
+      setUploading(false);
+    }
   };
 
   const deleteDocument = async (doc) => {
@@ -203,79 +278,120 @@ function MainApp({ user, onLogout }) {
     if (!question.trim() || loading) return;
     const q = question.trim();
     setQuestion("");
-    setMessages((prev) => [...prev, { role: "user", text: q }]);
+    streamBufferRef.current = "";
+    streamTextRef.current = "";
+    streamSourcesRef.current = [];
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text: q },
+      { role: "assistant", text: "", sources: [] },
+    ]);
     setLoading(true);
+    scrollToBottom("smooth");
+
+    const processLine = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch (parseError) {
+        console.error("Streaming parse error:", parseError, trimmed);
+        return;
+      }
+
+      if (parsed.type === "sources") {
+        streamSourcesRef.current = Array.isArray(parsed.data) ? parsed.data : [];
+        scheduleAssistantFlush(true);
+        return;
+      }
+
+      if (parsed.type === "token") {
+        streamTextRef.current += parsed.data || "";
+        scheduleAssistantFlush();
+        return;
+      }
+
+      if (parsed.type === "error") {
+        throw new Error(parsed.data || "Unknown server error");
+      }
+    };
 
     try {
-      setMessages((prev) => [...prev, { role: "assistant", text: "", sources: [] }]);
-      
       const token = localStorage.getItem("token");
       const res = await fetch(`${API}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           question: q,
           document_id: selectedDoc?.id || undefined,
-        })
+        }),
       });
 
       if (!res.ok) {
         throw new Error(`Server returned ${res.status}`);
       }
 
-      const reader = res.body.getReader();
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error("Empty response stream");
+      }
+
       const decoder = new TextDecoder("utf-8");
-      let currentText = "";
-      
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
-        const chunkStr = decoder.decode(value, { stream: true });
-        const lines = chunkStr.split("\n");
-        
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const parsed = JSON.parse(line);
-            if (parsed.type === "sources") {
-               setMessages(prev => {
-                   const newMsgs = [...prev];
-                   const last = newMsgs[newMsgs.length - 1];
-                   if (last.role === "assistant") last.sources = parsed.data;
-                   return newMsgs;
-               });
-            } else if (parsed.type === "token") {
-               currentText += parsed.data;
-               setMessages(prev => {
-                   const newMsgs = [...prev];
-                   const last = newMsgs[newMsgs.length - 1];
-                   if (last.role === "assistant") last.text = currentText;
-                   return newMsgs;
-               });
-            } else if (parsed.type === "error") {
-               throw new Error(parsed.data);
-            }
-          } catch(e) {
-             console.error("Streaming parse error:", e, line);
-          }
+        if (!value) continue;
+
+        streamBufferRef.current += decoder.decode(value, { stream: true });
+        let newlineIndex = streamBufferRef.current.indexOf("\n");
+
+        while (newlineIndex !== -1) {
+          const line = streamBufferRef.current.slice(0, newlineIndex);
+          streamBufferRef.current = streamBufferRef.current.slice(newlineIndex + 1);
+          processLine(line);
+          newlineIndex = streamBufferRef.current.indexOf("\n");
         }
       }
+
+      streamBufferRef.current += decoder.decode();
+      if (streamBufferRef.current.trim()) {
+        processLine(streamBufferRef.current);
+        streamBufferRef.current = "";
+      }
+      scheduleAssistantFlush(true);
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      if (streamFlushTimerRef.current) {
+        clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
       setMessages((prev) => {
-          const newMsgs = [...prev];
-          const last = newMsgs[newMsgs.length - 1];
-          if (last.role === "assistant" && !last.text) {
-             last.text = `⚠️ Error: ${err.message}`;
-             return newMsgs;
-          }
-          return [...prev, { role: "assistant", text: `⚠️ Error: ${err.message}` }];
+        if (prev.length === 0) {
+          return [{ role: "assistant", text: `Error: ${errorMessage}` }];
+        }
+
+        const lastIndex = prev.length - 1;
+        const last = prev[lastIndex];
+        if (last.role === "assistant") {
+          const next = [...prev];
+          next[lastIndex] = {
+            ...last,
+            text: last.text ? last.text : `Error: ${errorMessage}`,
+          };
+          return next;
+        }
+
+        return [...prev, { role: "assistant", text: `Error: ${errorMessage}` }];
       });
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleKey = (e) => {
@@ -406,30 +522,38 @@ function MainApp({ user, onLogout }) {
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <div key={i} className={`message ${msg.role}`}>
-                <div className="bubble">{msg.text}</div>
-                {msg.sources && msg.sources.length > 0 && (
-                  <div className="sources">
-                    {msg.sources.map((s, j) => (
-                      <span key={j} className="source-tag">
-                        📄 {s.name} {s.page !== "" && s.page != null ? `p.${s.page}` : ""}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+            {messages.map((msg, i) => {
+              const isStreamingPlaceholder =
+                msg.role === "assistant" &&
+                loading &&
+                i === messages.length - 1 &&
+                !msg.text;
 
-            {loading && (
-              <div className="message assistant">
-                <div className="bubble thinking">
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="dot" />
+              return (
+                <div key={i} className={`message ${msg.role}`}>
+                  <div className={`bubble ${isStreamingPlaceholder ? "thinking" : ""}`}>
+                    {isStreamingPlaceholder ? (
+                      <>
+                        <span className="dot" />
+                        <span className="dot" />
+                        <span className="dot" />
+                      </>
+                    ) : (
+                      msg.text
+                    )}
+                  </div>
+                  {msg.sources && msg.sources.length > 0 && (
+                    <div className="sources">
+                      {msg.sources.map((s, j) => (
+                        <span key={j} className="source-tag">
+                          {s.name} {s.page !== "" && s.page != null ? `p.${s.page}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })}
             <div ref={bottomRef} />
           </div>
 

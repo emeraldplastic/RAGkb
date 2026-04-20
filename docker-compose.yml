@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   ragkb:
     build: .
@@ -10,9 +8,10 @@ services:
       - DATABASE_PATH=/app/data/ragkb.db
       - CHROMA_PATH=/app/data/chroma_db
       - UPLOAD_DIR=/app/data/uploaded_docs
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - LLM_MODEL=${LLM_MODEL:-llama3.2}
-      - EMBED_MODEL=${EMBED_MODEL:-all-MiniLM-L6-v2}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - EMBED_MODEL=${EMBED_MODEL:-text-embedding-3-small}
     volumes:
       - ragkb_data:/app/data
     restart: unless-stopped
