@@ -1,37 +1,94 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import "./App.css";
 
 const API =
   process.env.REACT_APP_API_URL ||
   (window.location.hostname === "localhost" ? "http://127.0.0.1:8000" : "");
+
 const STREAM_FLUSH_INTERVAL_MS = 50;
 const MAX_CONCURRENT_UPLOADS = 3;
+const TOKEN_KEY = "ragkb_token";
+const USER_KEY = "ragkb_user";
 
-// ── Axios instance with auth header ─────────────────────
+const storage = {
+  getToken() {
+    return sessionStorage.getItem(TOKEN_KEY);
+  },
+  setToken(value) {
+    sessionStorage.setItem(TOKEN_KEY, value);
+  },
+  getUser() {
+    const raw = sessionStorage.getItem(USER_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      sessionStorage.removeItem(USER_KEY);
+      return null;
+    }
+  },
+  setUser(value) {
+    sessionStorage.setItem(USER_KEY, JSON.stringify(value));
+  },
+  clear() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(USER_KEY);
+  },
+};
+
 const api = axios.create({ baseURL: API });
-
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  const token = storage.getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
   return config;
 });
 
 api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    if (err.response?.status === 401) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      storage.clear();
       window.location.reload();
     }
-    return Promise.reject(err);
+    return Promise.reject(error);
   }
 );
 
-// ═══════════════════════════════════════════════════════════
-//  AUTH PAGE
-// ═══════════════════════════════════════════════════════════
+function formatApiError(err, fallback) {
+  if (err?.response?.status === 429) {
+    const retry = err.response?.headers?.["retry-after"];
+    return retry
+      ? `Rate limit reached. Retry in about ${retry} second(s).`
+      : "Rate limit reached. Please wait and try again.";
+  }
+  return err?.response?.data?.detail || fallback;
+}
+
+function Brand() {
+  return (
+    <div className="brand">
+      <div className="brand-mark" aria-hidden>
+        KB
+      </div>
+      <div>
+        <div className="brand-title">RAG Knowledge Base</div>
+        <div className="brand-subtitle">Private answers from your own documents</div>
+      </div>
+    </div>
+  );
+}
+
+function PrivacyNote({ compact = false }) {
+  return (
+    <div className={`privacy-note ${compact ? "compact" : ""}`}>
+      <span className="privacy-dot" />
+      Privacy mode: token is session-only, API responses are no-store, and you can delete account data.
+    </div>
+  );
+}
 
 function AuthPage({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -40,83 +97,121 @@ function AuthPage({ onLogin }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       const endpoint = isRegister ? "/api/register" : "/api/login";
-      const res = await axios.post(`${API}${endpoint}`, { username, password });
-      localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user", JSON.stringify(res.data.user));
-      onLogin(res.data.user);
+      const response = await axios.post(`${API}${endpoint}`, {
+        username: username.trim(),
+        password,
+      });
+      storage.setToken(response.data.token);
+      storage.setUser(response.data.user);
+      onLogin(response.data.user);
     } catch (err) {
-      setError(err.response?.data?.detail || "Something went wrong");
+      setError(formatApiError(err, "Unable to sign in right now."));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
-    <>
-      <div className="bg-animate" />
-      <div className="auth-container">
-        <div className="auth-card">
-          <div className="logo">
-            <div className="logo-icon">🧠</div>
-            <span className="logo-text">RAG KB</span>
-          </div>
-          <p className="subtitle">Your private AI knowledge base</p>
+    <div className="auth-shell">
+      <div className="aurora aurora-one" />
+      <div className="aurora aurora-two" />
+      <div className="auth-card">
+        <Brand />
+        <h1>{isRegister ? "Create your secure workspace" : "Welcome back"}</h1>
+        <p className="auth-copy">
+          Ask questions across your own docs with retrieval grounded answers and visible sources.
+        </p>
+        <PrivacyNote compact />
 
-          <h2>{isRegister ? "Create Account" : "Welcome Back"}</h2>
+        {error && <div className="error-panel">{error}</div>}
 
-          {error && <div className="error-msg">{error}</div>}
+        <form onSubmit={handleSubmit} className="auth-form">
+          <label htmlFor="username">Username</label>
+          <input
+            id="username"
+            type="text"
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="e.g. acme_ops"
+            required
+          />
 
-          <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label htmlFor="username">Username</label>
-              <input
-                id="username"
-                type="text"
-                placeholder="Enter your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                type="password"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={isRegister ? "new-password" : "current-password"}
-                required
-              />
-            </div>
-            <button type="submit" className="btn-primary" disabled={loading}>
-              {loading ? "Please wait..." : isRegister ? "Create Account" : "Sign In"}
-            </button>
-          </form>
+          <label htmlFor="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            autoComplete={isRegister ? "new-password" : "current-password"}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder={isRegister ? "At least 10 chars with symbol" : "Your password"}
+            required
+          />
 
-          <div className="auth-switch">
-            {isRegister ? "Already have an account? " : "Don't have an account? "}
-            <button onClick={() => { setIsRegister(!isRegister); setError(""); }}>
-              {isRegister ? "Sign In" : "Create one"}
-            </button>
-          </div>
-        </div>
+          <button type="submit" disabled={loading}>
+            {loading ? "Working..." : isRegister ? "Create Account" : "Sign In"}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          className="auth-switch"
+          onClick={() => {
+            setIsRegister((value) => !value);
+            setError("");
+          }}
+        >
+          {isRegister ? "Already registered? Sign in" : "Need an account? Register"}
+        </button>
       </div>
-    </>
+    </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  MAIN APP (Authenticated)
-// ═══════════════════════════════════════════════════════════
+function SourceChips({ sources }) {
+  if (!sources || sources.length === 0) return null;
+  return (
+    <div className="source-list">
+      {sources.map((source, index) => (
+        <span key={`${source.name}-${source.page}-${index}`} className="source-chip">
+          {source.name}
+          {source.page !== "" && source.page != null ? ` p.${source.page}` : ""}
+          {typeof source.confidence === "number"
+            ? ` (${Math.round(source.confidence * 100)}%)`
+            : ""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function Message({ message, loading }) {
+  const isStreamingPlaceholder =
+    message.role === "assistant" && loading && !message.text && !message.error;
+
+  return (
+    <div className={`message-row ${message.role}`}>
+      <div className={`message-bubble ${message.error ? "error" : ""}`}>
+        {isStreamingPlaceholder ? (
+          <div className="typing">
+            <span />
+            <span />
+            <span />
+          </div>
+        ) : (
+          message.text
+        )}
+      </div>
+      <SourceChips sources={message.sources} />
+    </div>
+  );
+}
 
 function MainApp({ user, onLogout }) {
   const [documents, setDocuments] = useState([]);
@@ -125,20 +220,26 @@ function MainApp({ user, onLogout }) {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(false);
+
   const bottomRef = useRef(null);
-  const dropdownRef = useRef(null);
+  const menuRef = useRef(null);
+  const textareaRef = useRef(null);
   const streamBufferRef = useRef("");
   const streamTextRef = useRef("");
   const streamSourcesRef = useRef([]);
-  const streamFlushTimerRef = useRef(null);
+  const streamTimerRef = useRef(null);
 
   const fetchDocuments = useCallback(async () => {
     try {
-      const res = await api.get("/api/documents");
-      setDocuments(res.data.documents);
+      const response = await api.get("/api/documents");
+      setDocuments(response.data.documents);
     } catch (err) {
-      console.error("Failed to fetch documents:", err);
+      setMessages((prev) => [
+        ...prev,
+        { role: "system", text: formatApiError(err, "Failed to refresh documents."), error: true },
+      ]);
     }
   }, []);
 
@@ -146,47 +247,54 @@ function MainApp({ user, onLogout }) {
     fetchDocuments();
   }, [fetchDocuments]);
 
-  const scrollToBottom = useCallback((behavior = "auto") => {
-    bottomRef.current?.scrollIntoView({ behavior });
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  useEffect(() => {
+    const closeMenu = (event) => {
+      if (!menuRef.current || menuRef.current.contains(event.target)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
   }, []);
 
   useEffect(() => {
-    scrollToBottom("smooth");
-  }, [messages.length, scrollToBottom]);
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
+  }, [question]);
 
   const flushAssistantMessage = useCallback(() => {
     setMessages((prev) => {
       if (prev.length === 0) return prev;
-      const lastIndex = prev.length - 1;
-      const last = prev[lastIndex];
+      const last = prev[prev.length - 1];
       if (last.role !== "assistant") return prev;
-
       const updated = {
         ...last,
         text: streamTextRef.current,
         sources: streamSourcesRef.current,
       };
       const next = [...prev];
-      next[lastIndex] = updated;
+      next[next.length - 1] = updated;
       return next;
     });
-    scrollToBottom("auto");
-  }, [scrollToBottom]);
+  }, []);
 
-  const scheduleAssistantFlush = useCallback(
+  const scheduleFlush = useCallback(
     (immediate = false) => {
       if (immediate) {
-        if (streamFlushTimerRef.current) {
-          clearTimeout(streamFlushTimerRef.current);
-          streamFlushTimerRef.current = null;
+        if (streamTimerRef.current) {
+          clearTimeout(streamTimerRef.current);
+          streamTimerRef.current = null;
         }
         flushAssistantMessage();
         return;
       }
-
-      if (streamFlushTimerRef.current) return;
-      streamFlushTimerRef.current = setTimeout(() => {
-        streamFlushTimerRef.current = null;
+      if (streamTimerRef.current) return;
+      streamTimerRef.current = setTimeout(() => {
+        streamTimerRef.current = null;
         flushAssistantMessage();
       }, STREAM_FLUSH_INTERVAL_MS);
     },
@@ -195,55 +303,47 @@ function MainApp({ user, onLogout }) {
 
   useEffect(
     () => () => {
-      if (streamFlushTimerRef.current) {
-        clearTimeout(streamFlushTimerRef.current);
+      if (streamTimerRef.current) {
+        clearTimeout(streamTimerRef.current);
       }
     },
     []
   );
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClick = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  const uploadFile = async (e) => {
-    const files = Array.from(e.target.files || []);
+  const uploadFiles = async (event) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
     if (files.length === 0) return;
-    setUploading(true);
 
+    setUploading(true);
     let successCount = 0;
-    let currentIndex = 0;
+    let pointer = 0;
 
     const worker = async () => {
-      while (currentIndex < files.length) {
-        const file = files[currentIndex];
-        currentIndex += 1;
-
-        const formData = new FormData();
-        formData.append("file", file);
-
+      while (pointer < files.length) {
+        const file = files[pointer];
+        pointer += 1;
         try {
-          await api.post("/api/upload", formData);
+          const body = new FormData();
+          body.append("file", file);
+          await api.post("/api/upload", body);
           successCount += 1;
         } catch (err) {
-          console.error("Upload failed for", file.name, err);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "system",
+              text: `${file.name}: ${formatApiError(err, "Upload failed.")}`,
+              error: true,
+            },
+          ]);
         }
       }
     };
 
     try {
       await Promise.all(
-        Array.from(
-          { length: Math.min(MAX_CONCURRENT_UPLOADS, files.length) },
-          () => worker()
-        )
+        Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, files.length) }, () => worker())
       );
       await fetchDocuments();
       setMessages((prev) => [
@@ -253,95 +353,117 @@ function MainApp({ user, onLogout }) {
           text: `Uploaded ${successCount}/${files.length} document(s)`,
         },
       ]);
-      scrollToBottom("smooth");
     } finally {
-      e.target.value = "";
       setUploading(false);
     }
   };
 
-  const deleteDocument = async (doc) => {
+  const handleDeleteDocument = async (doc) => {
     try {
       await api.delete(`/api/documents/${doc.id}`);
-      if (selectedDoc?.id === doc.id) setSelectedDoc(null);
+      if (selectedDoc?.id === doc.id) {
+        setSelectedDoc(null);
+      }
       await fetchDocuments();
+      setMessages((prev) => [...prev, { role: "system", text: `Deleted "${doc.name}"` }]);
+    } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: "system", text: `🗑️ Deleted "${doc.name}"` },
+        {
+          role: "system",
+          text: formatApiError(err, "Document deletion failed."),
+          error: true,
+        },
       ]);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (pendingDelete) return;
+    const confirmed = window.confirm(
+      "Delete your account and all uploaded documents? This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    setPendingDelete(true);
+    try {
+      await api.delete("/api/me");
+      storage.clear();
+      window.location.reload();
     } catch (err) {
-      console.error("Delete failed:", err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "system",
+          text: formatApiError(err, "Account deletion failed."),
+          error: true,
+        },
+      ]);
+    } finally {
+      setPendingDelete(false);
+      setMenuOpen(false);
     }
   };
 
   const sendMessage = async () => {
-    if (!question.trim() || loading) return;
-    const q = question.trim();
+    const text = question.trim();
+    if (!text || loading) return;
+
     setQuestion("");
+    setMessages((prev) => [...prev, { role: "user", text }, { role: "assistant", text: "", sources: [] }]);
+    setLoading(true);
+
     streamBufferRef.current = "";
     streamTextRef.current = "";
     streamSourcesRef.current = [];
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", text: q },
-      { role: "assistant", text: "", sources: [] },
-    ]);
-    setLoading(true);
-    scrollToBottom("smooth");
 
     const processLine = (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-
-      let parsed;
+      const value = line.trim();
+      if (!value) return;
+      let payload;
       try {
-        parsed = JSON.parse(trimmed);
-      } catch (parseError) {
-        console.error("Streaming parse error:", parseError, trimmed);
+        payload = JSON.parse(value);
+      } catch (err) {
         return;
       }
 
-      if (parsed.type === "sources") {
-        streamSourcesRef.current = Array.isArray(parsed.data) ? parsed.data : [];
-        scheduleAssistantFlush(true);
+      if (payload.type === "sources") {
+        streamSourcesRef.current = Array.isArray(payload.data) ? payload.data : [];
+        scheduleFlush(true);
         return;
       }
-
-      if (parsed.type === "token") {
-        streamTextRef.current += parsed.data || "";
-        scheduleAssistantFlush();
+      if (payload.type === "token") {
+        streamTextRef.current += payload.data || "";
+        scheduleFlush(false);
         return;
       }
-
-      if (parsed.type === "error") {
-        throw new Error(parsed.data || "Unknown server error");
+      if (payload.type === "error") {
+        throw new Error(payload.data || "Unknown server error");
       }
     };
 
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${API}/api/chat`, {
+      const response = await fetch(`${API}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${storage.getToken()}`,
         },
         body: JSON.stringify({
-          question: q,
+          question: text,
           document_id: selectedDoc?.id || undefined,
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
       }
-
-      const reader = res.body?.getReader();
-      if (!reader) {
-        throw new Error("Empty response stream");
+      if (!response.body) {
+        throw new Error("Missing response stream");
       }
 
       const decoder = new TextDecoder("utf-8");
+      const reader = response.body.getReader();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -350,7 +472,6 @@ function MainApp({ user, onLogout }) {
 
         streamBufferRef.current += decoder.decode(value, { stream: true });
         let newlineIndex = streamBufferRef.current.indexOf("\n");
-
         while (newlineIndex !== -1) {
           const line = streamBufferRef.current.slice(0, newlineIndex);
           streamBufferRef.current = streamBufferRef.current.slice(newlineIndex + 1);
@@ -362,253 +483,185 @@ function MainApp({ user, onLogout }) {
       streamBufferRef.current += decoder.decode();
       if (streamBufferRef.current.trim()) {
         processLine(streamBufferRef.current);
-        streamBufferRef.current = "";
       }
-      scheduleAssistantFlush(true);
+      streamBufferRef.current = "";
+      scheduleFlush(true);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      if (streamFlushTimerRef.current) {
-        clearTimeout(streamFlushTimerRef.current);
-        streamFlushTimerRef.current = null;
-      }
+      const textError = err instanceof Error ? err.message : "Chat failed.";
       setMessages((prev) => {
-        if (prev.length === 0) {
-          return [{ role: "assistant", text: `Error: ${errorMessage}` }];
-        }
-
-        const lastIndex = prev.length - 1;
-        const last = prev[lastIndex];
-        if (last.role === "assistant") {
-          const next = [...prev];
+        if (prev.length === 0) return prev;
+        const next = [...prev];
+        const lastIndex = next.length - 1;
+        if (next[lastIndex].role === "assistant") {
           next[lastIndex] = {
-            ...last,
-            text: last.text ? last.text : `Error: ${errorMessage}`,
+            ...next[lastIndex],
+            text: next[lastIndex].text || textError,
+            error: true,
           };
           return next;
         }
-
-        return [...prev, { role: "assistant", text: `Error: ${errorMessage}` }];
+        return [...next, { role: "assistant", text: textError, error: true }];
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
+  const documentScopeText = useMemo(() => {
+    if (selectedDoc) return `Focused on: ${selectedDoc.name}`;
+    if (documents.length > 0) return "Searching across all documents";
+    return "Upload documents to start asking questions";
+  }, [selectedDoc, documents.length]);
 
   const formatSize = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
-  };
-
-  const getFileIcon = (type) => {
-    if (type === ".pdf") return "📕";
-    if (type === ".txt") return "📝";
-    if (type === ".md") return "📘";
-    return "📄";
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   return (
-    <>
-      <div className="bg-animate" />
-      <div className="app">
-        {/* ── Sidebar ─────────────────────────────── */}
-        <aside className="sidebar">
-          <div className="sidebar-header">
-            <div className="sidebar-brand">
-              <div className="logo-icon">🧠</div>
-              <h1>RAG KB</h1>
-            </div>
-            <div className="user-menu" ref={dropdownRef}>
-              <div
-                className="user-avatar"
-                onClick={() => setShowDropdown(!showDropdown)}
-                title={user.username}
-              >
-                {user.username[0].toUpperCase()}
-              </div>
-              {showDropdown && (
-                <div className="user-dropdown">
-                  <div className="user-info">
-                    <div className="name">{user.username}</div>
-                    <div className="label">Signed in</div>
-                  </div>
-                  <button onClick={onLogout}>⏻ Sign Out</button>
-                </div>
-              )}
-            </div>
-          </div>
+    <div className="app-shell">
+      <div className="aurora aurora-one" />
+      <div className="aurora aurora-two" />
 
-          <label className="upload-btn" id="upload-button">
-            <span className="icon">{uploading ? "⏳" : "＋"}</span>
-            <span>{uploading ? "Uploading..." : "Upload Document"}</span>
+      <aside className="sidebar">
+        <Brand />
+        <PrivacyNote />
+
+        <div className="sidebar-actions">
+          <label className="upload-button">
+            {uploading ? "Uploading..." : "Upload documents"}
             <input
               type="file"
               accept=".pdf,.txt,.md"
-              onChange={uploadFile}
-              hidden
+              onChange={uploadFiles}
               disabled={uploading}
               multiple
-              webkitdirectory="true"
+              hidden
             />
           </label>
+        </div>
 
-          <div className="section-label">Your Documents</div>
-          <div className="doc-list">
-            {documents.length === 0 && (
-              <p className="no-docs">No documents uploaded yet</p>
-            )}
-            {documents.map((doc) => (
-              <div
-                key={doc.id}
-                className={`doc-item ${selectedDoc?.id === doc.id ? "active" : ""}`}
-                onClick={() =>
-                  setSelectedDoc(selectedDoc?.id === doc.id ? null : doc)
-                }
-              >
-                <span className="doc-icon">{getFileIcon(doc.type)}</span>
-                <div className="doc-info">
-                  <div className="doc-name" title={doc.name}>{doc.name}</div>
-                  <div className="doc-meta">
-                    {doc.pages} pages · {formatSize(doc.size)}
-                  </div>
-                </div>
-                <button
-                  className="delete-btn"
-                  title="Delete document"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteDocument(doc);
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {selectedDoc && (
-            <div className="filter-badge">
-              <span className="badge-icon">🔍</span>
-              Searching: {selectedDoc.name}
-            </div>
-          )}
-          {!selectedDoc && documents.length > 0 && (
-            <div className="filter-badge all">
-              <span className="badge-icon">📚</span>
-              Searching all documents
-            </div>
-          )}
-        </aside>
-
-        {/* ── Chat Area ───────────────────────────── */}
-        <main className="chat">
-          <div className="messages" id="messages-container">
-            {messages.length === 0 && (
-              <div className="empty-state">
-                <div className="empty-icon">💬</div>
-                <h2>Ask your documents anything</h2>
-                <p>
-                  Upload PDFs, text files, or markdown documents, then ask
-                  questions. Your AI assistant will find answers from your
-                  personal knowledge base.
-                </p>
-              </div>
-            )}
-
-            {messages.map((msg, i) => {
-              const isStreamingPlaceholder =
-                msg.role === "assistant" &&
-                loading &&
-                i === messages.length - 1 &&
-                !msg.text;
-
-              return (
-                <div key={i} className={`message ${msg.role}`}>
-                  <div className={`bubble ${isStreamingPlaceholder ? "thinking" : ""}`}>
-                    {isStreamingPlaceholder ? (
-                      <>
-                        <span className="dot" />
-                        <span className="dot" />
-                        <span className="dot" />
-                      </>
-                    ) : (
-                      msg.text
-                    )}
-                  </div>
-                  {msg.sources && msg.sources.length > 0 && (
-                    <div className="sources">
-                      {msg.sources.map((s, j) => (
-                        <span key={j} className="source-tag">
-                          {s.name} {s.page !== "" && s.page != null ? `p.${s.page}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            <div ref={bottomRef} />
-          </div>
-
-          <div className="input-row">
-            <textarea
-              id="chat-input"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={handleKey}
-              placeholder={
-                selectedDoc
-                  ? `Ask about ${selectedDoc.name}...`
-                  : "Ask anything across your documents..."
-              }
-              rows={1}
-            />
+        <div className="section-header">Documents</div>
+        <div className="document-list">
+          {documents.length === 0 && <p className="empty-docs">No documents yet.</p>}
+          {documents.map((doc) => (
             <button
-              className="send-btn"
-              id="send-button"
-              onClick={sendMessage}
-              disabled={loading || !question.trim()}
-              title="Send message"
+              key={doc.id}
+              type="button"
+              className={`document-item ${selectedDoc?.id === doc.id ? "active" : ""}`}
+              onClick={() => setSelectedDoc((prev) => (prev?.id === doc.id ? null : doc))}
             >
-              ➤
+              <span className="document-name" title={doc.name}>
+                {doc.name}
+              </span>
+              <span className="document-meta">
+                {doc.pages} pages - {formatSize(doc.size)}
+              </span>
+              <span
+                className="document-delete"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleDeleteDocument(doc);
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleDeleteDocument(doc);
+                  }
+                }}
+              >
+                Delete
+              </span>
             </button>
-          </div>
-        </main>
-      </div>
-    </>
+          ))}
+        </div>
+
+        <div className="scope-chip">{documentScopeText}</div>
+
+        <div className="user-menu" ref={menuRef}>
+          <button
+            type="button"
+            className="user-button"
+            onClick={() => setMenuOpen((value) => !value)}
+          >
+            <span>{user.username}</span>
+            <span className="caret">{menuOpen ? "▲" : "▼"}</span>
+          </button>
+          {menuOpen && (
+            <div className="user-dropdown">
+              <button type="button" onClick={onLogout}>
+                Sign out
+              </button>
+              <button type="button" className="danger" onClick={handleDeleteAccount}>
+                {pendingDelete ? "Deleting..." : "Delete account and data"}
+              </button>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      <main className="chat-pane">
+        <div className="message-list">
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <h2>Ask anything grounded in your documents</h2>
+              <p>
+                Upload files, choose a document scope, then ask your question. Answers include the
+                retrieved source references.
+              </p>
+            </div>
+          )}
+
+          {messages.map((message, index) => (
+            <Message key={`${message.role}-${index}`} message={message} loading={loading} />
+          ))}
+          <div ref={bottomRef} />
+        </div>
+
+        <div className="composer">
+          <textarea
+            ref={textareaRef}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+              }
+            }}
+            rows={1}
+            placeholder={
+              selectedDoc
+                ? `Ask about "${selectedDoc.name}"...`
+                : "Ask a question across your knowledge base..."
+            }
+          />
+          <button type="button" onClick={sendMessage} disabled={!question.trim() || loading}>
+            Send
+          </button>
+        </div>
+      </main>
+    </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ROOT — Routes between Auth and Main
-// ═══════════════════════════════════════════════════════════
-
 export default function App() {
-  const [user, setUser] = useState(() => {
-    const stored = localStorage.getItem("user");
-    return stored ? JSON.parse(stored) : null;
-  });
-
-  const handleLogin = (userData) => {
-    setUser(userData);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setUser(null);
-  };
+  const [user, setUser] = useState(() => storage.getUser());
 
   if (!user) {
-    return <AuthPage onLogin={handleLogin} />;
+    return <AuthPage onLogin={setUser} />;
   }
-
-  return <MainApp user={user} onLogout={handleLogout} />;
+  return (
+    <MainApp
+      user={user}
+      onLogout={() => {
+        storage.clear();
+        setUser(null);
+      }}
+    />
+  );
 }

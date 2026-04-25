@@ -8,3 +8,5 @@ uploaded_docs/
 node_modules/
 frontend/build/
 efhu
+
+.vercel

@@ -1,47 +1,115 @@
-# RAGkb Deployment Guide
+# RAGkb
 
-This app runs as one FastAPI service and serves the built React frontend.
+RAGkb is a private document Q&A app:
+- FastAPI backend (auth, upload, retrieval, streaming chat)
+- React frontend
+- per-user document isolation
 
-## 1) Deploy online on Render (recommended)
+## Security and privacy highlights
 
-### Prerequisites
-- A GitHub repo containing this project.
-- An OpenAI API key.
+- Strict security headers + no-store API responses
+- Configurable trusted hosts and CORS allowlist
+- JWT issuer/audience validation
+- Strong password policy
+- Endpoint rate limiting for login/register/upload/chat
+- Upload size and filename limits
+- Relevance-threshold retrieval before generation
+- Account-level data deletion endpoint (`DELETE /api/me`)
+- Session-scoped auth token storage in the frontend
 
-### Steps
-1. Push this project to GitHub.
-2. In Render, create a new **Blueprint** and select your repo.
-3. Render will detect [`render.yaml`](./render.yaml).
-4. Set `OPENAI_API_KEY` in Render environment variables.
-5. (Optional) Set `OPENAI_BASE_URL` only if you use an OpenAI-compatible gateway.
-6. Deploy.
-7. Open: `https://<your-service>.onrender.com`
+## Local development
 
-### Default health endpoint
-- `GET /api/health`
-
-## 2) Important env vars
-
-- `SECRET_KEY`: JWT signing key.
-- `DATABASE_PATH`: SQLite path (use mounted disk path in cloud).
-- `CHROMA_PATH`: Chroma directory path.
-- `UPLOAD_DIR`: uploaded files path.
-- `OPENAI_API_KEY`: required API key.
-- `OPENAI_BASE_URL`: optional override for compatible providers.
-- `LLM_MODEL`: chat model, default `gpt-4o-mini`.
-- `EMBED_MODEL`: embedding model, default `text-embedding-3-small`.
-
-## 3) Local Docker test
+1. Backend dependencies:
 
 ```bash
-docker compose up --build
+pip install -r requirements.txt
 ```
 
-Then open `http://localhost:8000`.
+2. Frontend dependencies:
 
-## Notes
+```bash
+cd frontend
+npm install
+```
 
-- Frontend API base behavior:
-  - `http://127.0.0.1:8000` on localhost.
-  - same-origin API in production.
-- The container respects cloud `PORT` automatically.
+3. Copy env template:
+
+```bash
+cp .env.example .env
+```
+
+4. Run backend:
+
+```bash
+uvicorn main:app --reload
+```
+
+5. Run frontend (in another terminal):
+
+```bash
+cd frontend
+npm start
+```
+
+## Test backend
+
+```bash
+pytest -q
+```
+
+## Deploy to Vercel
+
+This repo is configured for Vercel using `vercel.json` and `api/index.py`.
+
+1. Build the frontend so `frontend/build` exists:
+
+```bash
+cd frontend
+npm run build
+cd ..
+```
+
+2. Deploy:
+
+```bash
+vercel
+```
+
+3. Production deploy:
+
+```bash
+vercel --prod
+```
+
+## Key environment variables
+
+See `.env.example` for full list. Most important in production:
+- `APP_ENV=production`
+- `SECRET_KEY` (required, long random value)
+- `AI_PROVIDER` (`openai` or `google`)
+- `OPENAI_API_KEY` for OpenAI/OpenAI-compatible APIs
+- `GOOGLE_API_KEY` for Gemini
+- `TRUSTED_HOSTS`
+- `CORS_ALLOW_ORIGINS`
+
+### Using Gemini instead of OpenAI
+
+Set these Vercel environment variables:
+
+```bash
+AI_PROVIDER=google
+LLM_PROVIDER=google
+EMBED_PROVIDER=google
+GOOGLE_API_KEY=<your-gemini-api-key>
+```
+
+Optional model overrides:
+
+```bash
+LLM_MODEL=gemini-1.5-flash
+EMBED_MODEL=models/text-embedding-004
+```
+
+For OpenAI-compatible gateways, keep `AI_PROVIDER=openai`, set `OPENAI_API_KEY`,
+and set `OPENAI_BASE_URL` when the provider requires a custom base URL. Make sure
+the provider supports embeddings, not only chat.

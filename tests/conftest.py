@@ -6,14 +6,13 @@ Mocks heavy dependencies (embeddings) for fast, lightweight tests.
 import os
 import sys
 import pytest
-from unittest.mock import patch
 
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 class FakeEmbeddings:
-    """Lightweight mock that replaces HuggingFaceEmbeddings."""
+    """Lightweight mock embedding model."""
     def __init__(self, **kwargs):
         pass
 
@@ -24,6 +23,13 @@ class FakeEmbeddings:
         return [0.1] * 384
 
 
+class FakeRagChain:
+    """Lightweight chain mock used in tests."""
+
+    def stream(self, _payload):
+        yield "Mocked answer"
+
+
 @pytest.fixture(autouse=True)
 def setup_test_env(tmp_path, monkeypatch):
     """Configure all paths to use temporary directories for isolation."""
@@ -31,6 +37,8 @@ def setup_test_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CHROMA_PATH", str(tmp_path / "chroma"))
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-testing-only")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "0")
 
 
 @pytest.fixture
@@ -55,15 +63,15 @@ def client(setup_test_env):
     import auth
     importlib.reload(auth)
 
-    # 4. Reload main with mocked embeddings — it imports from all three
-    with patch("langchain_community.embeddings.HuggingFaceEmbeddings", FakeEmbeddings):
-        import main
-        importlib.reload(main)
-        # Replace the module-level embeddings object with our fake
-        main.embeddings = FakeEmbeddings()
+    # 4. Reload main and replace external model clients with fakes
+    import main
+    importlib.reload(main)
+    main.get_embeddings_client = lambda: FakeEmbeddings()
+    main.get_rag_generation_chain = lambda: FakeRagChain()
+    main.get_user_db.cache_clear()
 
-        from starlette.testclient import TestClient
-        yield TestClient(main.app)
+    from starlette.testclient import TestClient
+    yield TestClient(main.app)
 
 
 @pytest.fixture
@@ -71,7 +79,7 @@ def auth_headers(client):
     """Register a test user and return auth headers."""
     res = client.post("/api/register", json={
         "username": "testuser",
-        "password": "testpass123",
+        "password": "Testpass123!",
     })
     assert res.status_code == 200, f"Register failed: {res.json()}"
     token = res.json()["token"]
@@ -83,7 +91,7 @@ def second_user_headers(client):
     """Register a second test user and return auth headers."""
     res = client.post("/api/register", json={
         "username": "otheruser",
-        "password": "otherpass123",
+        "password": "Otherpass123!",
     })
     assert res.status_code == 200, f"Register failed: {res.json()}"
     token = res.json()["token"]

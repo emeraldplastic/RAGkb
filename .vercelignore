@@ -1,0 +1,12 @@
+venv
+__pycache__
+frontend/node_modules
+frontend/src
+frontend/public
+frontend/.env*
+chroma_db
+uploaded_docs
+debug_uploads
+*.db
+*.pyc
+.pytest_cache

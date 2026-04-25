@@ -3,12 +3,16 @@ SQLite database setup for user management and document metadata.
 Users can only see and query their own documents.
 """
 
+import os
 import sqlite3
 from config import DATABASE_PATH
 
 
 def get_connection():
     """Get a SQLite connection with row_factory for dict-like access."""
+    db_dir = os.path.dirname(os.path.abspath(DATABASE_PATH))
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
@@ -182,6 +186,17 @@ def delete_document(doc_id: int, user_id: int) -> bool:
         "DELETE FROM documents WHERE id = ? AND user_id = ?",
         (doc_id, user_id)
     )
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a user and all related documents."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
     deleted = cursor.rowcount > 0
     conn.commit()
     conn.close()
