@@ -3,9 +3,10 @@ import time
 
 def run_test():
     # login
-    login = requests.post('http://127.0.0.1:8000/api/register', json={'username': 'testuser12', 'password': 'password123'})
+    password = 'Password123!'
+    login = requests.post('http://127.0.0.1:8000/api/register', json={'username': 'testuser12', 'password': password})
     if login.status_code == 409:
-        login = requests.post('http://127.0.0.1:8000/api/login', json={'username': 'testuser12', 'password': 'password123'})
+        login = requests.post('http://127.0.0.1:8000/api/login', json={'username': 'testuser12', 'password': password})
     
     t = login.json()['token']
     headers = {'Authorization': 'Bearer ' + t}

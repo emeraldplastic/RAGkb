@@ -369,6 +369,20 @@ def build_sources(scored_docs: list[tuple[object, float]]) -> list[dict]:
     return sources
 
 
+def serialize_document(doc: dict) -> dict:
+    return {
+        "id": doc["id"],
+        "name": doc["original_name"],
+        "type": doc["file_type"],
+        "pages": doc["page_count"],
+        "chunks": doc["chunk_count"],
+        "size": doc["file_size"],
+        "uploaded_at": doc["uploaded_at"],
+        "status": doc.get("status", "ready"),
+        "error": doc.get("error_message"),
+    }
+
+
 def delete_local_file(path: str) -> None:
     if os.path.exists(path):
         os.remove(path)
@@ -490,14 +504,21 @@ def upload_document(
         page_count=0,
         chunk_count=0,
         file_size=file_size,
+        status="queued",
     )
 
     def process_file_in_background() -> None:
         try:
+            db.update_document_status(doc_id, user_id, "processing")
             pages = load_document(file_path, ext)
             chunks = text_splitter.split_documents(pages)
             if not chunks:
-                db.delete_document(doc_id, user_id)
+                db.update_document_status(
+                    doc_id,
+                    user_id,
+                    "failed",
+                    "No readable text was found in this document.",
+                )
                 delete_local_file(file_path)
                 return
 
@@ -517,7 +538,12 @@ def upload_document(
                 chunk_count=len(chunks),
             )
         except Exception:
-            db.delete_document(doc_id, user_id)
+            db.update_document_status(
+                doc_id,
+                user_id,
+                "failed",
+                "Document processing failed. Try a cleaner PDF or plain text file.",
+            )
             delete_local_file(file_path)
 
     background_tasks.add_task(process_file_in_background)
@@ -530,6 +556,7 @@ def upload_document(
             "pages": 0,
             "chunks": 0,
             "size": file_size,
+            "status": "queued",
         },
     }
 
@@ -537,20 +564,7 @@ def upload_document(
 @app.get("/api/documents")
 def list_documents(user: dict = Depends(get_current_user)):
     docs = db.get_user_documents(user["id"])
-    return {
-        "documents": [
-            {
-                "id": d["id"],
-                "name": d["original_name"],
-                "type": d["file_type"],
-                "pages": d["page_count"],
-                "chunks": d["chunk_count"],
-                "size": d["file_size"],
-                "uploaded_at": d["uploaded_at"],
-            }
-            for d in docs
-        ]
-    }
+    return {"documents": [serialize_document(d) for d in docs]}
 
 
 @app.get("/api/documents/{doc_id}")
@@ -558,15 +572,7 @@ def get_document_info(doc_id: int, user: dict = Depends(get_current_user)):
     doc = db.get_document(doc_id, user["id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return {
-        "id": doc["id"],
-        "name": doc["original_name"],
-        "type": doc["file_type"],
-        "pages": doc["page_count"],
-        "chunks": doc["chunk_count"],
-        "size": doc["file_size"],
-        "uploaded_at": doc["uploaded_at"],
-    }
+    return serialize_document(doc)
 
 
 @app.delete("/api/documents/{doc_id}")
@@ -613,6 +619,11 @@ def chat(request: ChatRequest, web_request: Request, user: dict = Depends(get_cu
         doc = db.get_document(request.document_id, user_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
+        if doc.get("status", "ready") != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail="Document is not ready for chat yet.",
+            )
         filter_filename = doc["filename"]
 
     user_db = get_user_db(user_id)

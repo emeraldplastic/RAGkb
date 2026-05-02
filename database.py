@@ -46,10 +46,14 @@ def init_db():
             page_count INTEGER DEFAULT 0,
             chunk_count INTEGER DEFAULT 0,
             file_size INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'ready',
+            error_message TEXT,
             uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
+
+    _ensure_document_columns(cursor)
 
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_documents_user_uploaded
@@ -66,6 +70,16 @@ def init_db():
 
 
 # ── User operations ──────────────────────────────────────
+
+def _ensure_document_columns(cursor: sqlite3.Cursor) -> None:
+    """Add document processing columns for databases created by older versions."""
+    cursor.execute("PRAGMA table_info(documents)")
+    existing = {row["name"] for row in cursor.fetchall()}
+    if "status" not in existing:
+        cursor.execute("ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
+    if "error_message" not in existing:
+        cursor.execute("ALTER TABLE documents ADD COLUMN error_message TEXT")
+
 
 def create_user(username: str, password_hash: str) -> int:
     """Create a new user and return their ID."""
@@ -105,15 +119,26 @@ def get_user_by_id(user_id: int) -> dict | None:
 
 def add_document(user_id: int, filename: str, original_name: str,
                  file_type: str, page_count: int, chunk_count: int,
-                 file_size: int) -> int:
+                 file_size: int, status: str = "queued",
+                 error_message: str | None = None) -> int:
     """Record a document upload for a specific user."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO documents
-           (user_id, filename, original_name, file_type, page_count, chunk_count, file_size)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, filename, original_name, file_type, page_count, chunk_count, file_size)
+           (user_id, filename, original_name, file_type, page_count, chunk_count, file_size, status, error_message)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            user_id,
+            filename,
+            original_name,
+            file_type,
+            page_count,
+            chunk_count,
+            file_size,
+            status,
+            error_message,
+        )
     )
     conn.commit()
     doc_id = cursor.lastrowid
@@ -128,10 +153,33 @@ def update_document_stats(doc_id: int, user_id: int, page_count: int, chunk_coun
     cursor.execute(
         """
         UPDATE documents
-        SET page_count = ?, chunk_count = ?
+        SET page_count = ?, chunk_count = ?, status = 'ready', error_message = NULL
         WHERE id = ? AND user_id = ?
         """,
         (page_count, chunk_count, doc_id, user_id),
+    )
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def update_document_status(
+    doc_id: int,
+    user_id: int,
+    status: str,
+    error_message: str | None = None,
+) -> bool:
+    """Update processing status for a document that belongs to the user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE documents
+        SET status = ?, error_message = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (status, error_message, doc_id, user_id),
     )
     updated = cursor.rowcount > 0
     conn.commit()

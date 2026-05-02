@@ -85,7 +85,7 @@ function PrivacyNote({ compact = false }) {
   return (
     <div className={`privacy-note ${compact ? "compact" : ""}`}>
       <span className="privacy-dot" />
-      Privacy mode: token is session-only, API responses are no-store, and you can delete account data.
+      Session-only access with account data deletion.
     </div>
   );
 }
@@ -119,8 +119,6 @@ function AuthPage({ onLogin }) {
 
   return (
     <div className="auth-shell">
-      <div className="aurora aurora-one" />
-      <div className="aurora aurora-two" />
       <div className="auth-card">
         <Brand />
         <h1>{isRegister ? "Create your secure workspace" : "Welcome back"}</h1>
@@ -150,7 +148,7 @@ function AuthPage({ onLogin }) {
             autoComplete={isRegister ? "new-password" : "current-password"}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            placeholder={isRegister ? "At least 10 chars with symbol" : "Your password"}
+            placeholder={isRegister ? "Uppercase, lowercase, number, symbol" : "Your password"}
             required
           />
 
@@ -246,6 +244,29 @@ function MainApp({ user, onLogout }) {
   useEffect(() => {
     fetchDocuments();
   }, [fetchDocuments]);
+
+  const hasProcessingDocuments = useMemo(
+    () => documents.some((doc) => ["queued", "processing"].includes(doc.status)),
+    [documents]
+  );
+
+  useEffect(() => {
+    if (!hasProcessingDocuments) return undefined;
+    const timer = window.setInterval(fetchDocuments, 2500);
+    return () => window.clearInterval(timer);
+  }, [fetchDocuments, hasProcessingDocuments]);
+
+  useEffect(() => {
+    if (!selectedDoc) return;
+    const freshDoc = documents.find((doc) => doc.id === selectedDoc.id);
+    if (!freshDoc) {
+      setSelectedDoc(null);
+      return;
+    }
+    if (freshDoc !== selectedDoc) {
+      setSelectedDoc(freshDoc);
+    }
+  }, [documents, selectedDoc]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -350,7 +371,7 @@ function MainApp({ user, onLogout }) {
         ...prev,
         {
           role: "system",
-          text: `Uploaded ${successCount}/${files.length} document(s)`,
+          text: `Queued ${successCount}/${files.length} document(s) for processing`,
         },
       ]);
     } finally {
@@ -408,6 +429,13 @@ function MainApp({ user, onLogout }) {
   const sendMessage = async () => {
     const text = question.trim();
     if (!text || loading) return;
+    if (selectedDoc && selectedDoc.status !== "ready") {
+      setMessages((prev) => [
+        ...prev,
+        { role: "system", text: "Selected document is not ready for chat yet.", error: true },
+      ]);
+      return;
+    }
 
     setQuestion("");
     setMessages((prev) => [...prev, { role: "user", text }, { role: "assistant", text: "", sources: [] }]);
@@ -509,9 +537,10 @@ function MainApp({ user, onLogout }) {
 
   const documentScopeText = useMemo(() => {
     if (selectedDoc) return `Focused on: ${selectedDoc.name}`;
+    if (hasProcessingDocuments) return "Processing uploaded documents";
     if (documents.length > 0) return "Searching across all documents";
     return "Upload documents to start asking questions";
-  }, [selectedDoc, documents.length]);
+  }, [selectedDoc, documents.length, hasProcessingDocuments]);
 
   const formatSize = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -519,11 +548,15 @@ function MainApp({ user, onLogout }) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const formatDocumentStatus = (doc) => {
+    if (doc.status === "queued") return "Queued";
+    if (doc.status === "processing") return "Processing";
+    if (doc.status === "failed") return "Failed";
+    return `${doc.pages} pages - ${formatSize(doc.size)}`;
+  };
+
   return (
     <div className="app-shell">
-      <div className="aurora aurora-one" />
-      <div className="aurora aurora-two" />
-
       <aside className="sidebar">
         <Brand />
         <PrivacyNote />
@@ -549,14 +582,32 @@ function MainApp({ user, onLogout }) {
             <button
               key={doc.id}
               type="button"
-              className={`document-item ${selectedDoc?.id === doc.id ? "active" : ""}`}
-              onClick={() => setSelectedDoc((prev) => (prev?.id === doc.id ? null : doc))}
+              className={`document-item document-item--${doc.status || "ready"} ${
+                selectedDoc?.id === doc.id ? "active" : ""
+              }`}
+              onClick={() => {
+                if (doc.status && doc.status !== "ready") {
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      role: "system",
+                      text:
+                        doc.status === "failed"
+                          ? doc.error || "Document processing failed."
+                          : "Document is still processing.",
+                      error: doc.status === "failed",
+                    },
+                  ]);
+                  return;
+                }
+                setSelectedDoc((prev) => (prev?.id === doc.id ? null : doc));
+              }}
             >
               <span className="document-name" title={doc.name}>
                 {doc.name}
               </span>
               <span className="document-meta">
-                {doc.pages} pages - {formatSize(doc.size)}
+                {formatDocumentStatus(doc)}
               </span>
               <span
                 className="document-delete"
@@ -589,7 +640,7 @@ function MainApp({ user, onLogout }) {
             onClick={() => setMenuOpen((value) => !value)}
           >
             <span>{user.username}</span>
-            <span className="caret">{menuOpen ? "▲" : "▼"}</span>
+            <span className="caret">{menuOpen ? "^" : "v"}</span>
           </button>
           {menuOpen && (
             <div className="user-dropdown">

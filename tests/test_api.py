@@ -130,6 +130,7 @@ class TestDocuments:
         data = res.json()
         assert data["document"]["name"] == "test.txt"
         assert data["document"]["chunks"] == 0
+        assert data["document"]["status"] == "queued"
 
     def test_upload_unsupported_type(self, client, auth_headers):
         files = {"file": ("test.exe", io.BytesIO(b"binary"), "application/octet-stream")}
@@ -147,6 +148,7 @@ class TestDocuments:
         docs = res.json()["documents"]
         assert len(docs) == 1
         assert docs[0]["name"] == "list_test.txt"
+        assert docs[0]["status"] in {"queued", "processing", "ready", "failed"}
 
     def test_delete_document(self, client, auth_headers):
         # Upload
