@@ -11,4 +11,4 @@
 - [x] Frontend test and production build pass
 - [x] Vercel deployment
 - [x] Production smoke test
-- [ ] GitHub push
+- [x] GitHub push
