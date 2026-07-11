@@ -20,7 +20,9 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py database.py auth.py main.py rate_limit.py ./
+COPY config.py database.py auth.py main.py rate_limit.py schemas.py middleware.py serializers.py ./
+COPY routers/ ./routers/
+COPY services/ ./services/
 COPY --from=frontend-build /app/frontend/build ./frontend/build
 
 RUN mkdir -p /app/chroma_db /app/uploaded_docs

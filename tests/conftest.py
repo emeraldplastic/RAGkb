@@ -63,12 +63,15 @@ def client(setup_test_env):
     import auth
     importlib.reload(auth)
 
-    # 4. Reload main and replace external model clients with fakes
+    # 4. Reload services and main, then replace external model clients with fakes
+    from services import rag_service
+    importlib.reload(rag_service)
+    rag_service.get_embeddings_client = lambda: FakeEmbeddings()
+    rag_service.get_rag_generation_chain = lambda: FakeRagChain()
+    rag_service.get_user_db.cache_clear()
+
     import main
     importlib.reload(main)
-    main.get_embeddings_client = lambda: FakeEmbeddings()
-    main.get_rag_generation_chain = lambda: FakeRagChain()
-    main.get_user_db.cache_clear()
 
     from starlette.testclient import TestClient
     yield TestClient(main.app)

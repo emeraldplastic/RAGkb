@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import os
+import uuid
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -80,6 +81,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
             "exp": expire,
             "iss": JWT_ISSUER,
             "aud": JWT_AUDIENCE,
+            "jti": str(uuid.uuid4()),
         }
     )
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
