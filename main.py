@@ -108,6 +108,29 @@ def health():
     return {"status": "ok", "version": "2.1.0"}
 
 
+@app.get("/api/stats", tags=["system"])
+def stats():
+    """Return usage statistics for monitoring and analytics."""
+    return {
+        "rate_limit_stats": {
+            "enabled": RATE_LIMIT_ENABLED,
+            "active_clients": len(rate_limiter._requests) if hasattr(rate_limiter, '_requests') else 0,
+            "policies": {
+                "auth": {"limit": AUTH_RATE_LIMIT_REQUESTS, "window": AUTH_RATE_LIMIT_WINDOW_SECONDS},
+                "username_login": {"limit": LOGIN_USERNAME_RATE_LIMIT_REQUESTS, "window": LOGIN_USERNAME_RATE_LIMIT_WINDOW_SECONDS},
+                "upload": {"limit": UPLOAD_RATE_LIMIT_REQUESTS, "window": UPLOAD_RATE_LIMIT_WINDOW_SECONDS},
+                "chat": {"limit": CHAT_RATE_LIMIT_REQUESTS, "window": CHAT_RATE_LIMIT_WINDOW_SECONDS},
+            }
+        },
+        "config": {
+            "cors_enabled": ENABLE_CORS,
+            "trusted_hosts": TRUSTED_HOSTS,
+            "upload_dir": UPLOAD_DIR,
+            "version": "2.1.0"
+        }
+    }
+
+
 # ── Static React Frontend (if built) ────────────────────
 
 BUILD_DIR = os.path.join(os.path.dirname(__file__), "frontend", "build")
