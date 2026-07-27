@@ -1,12 +1,45 @@
+# Virtual environments
 venv/
+.venv/
+
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# Environment variables
 .env
-chroma_db/
-uploaded_docs/
+.env.local
+
+# Database files
 *.db
+chroma_db/
+
+# Uploaded documents
+uploaded_docs/
+debug_uploads/
+
+# Node.js
 node_modules/
 frontend/build/
-efhu
 
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE & editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+
+# Vercel
 .vercel
