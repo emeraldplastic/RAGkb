@@ -232,3 +232,22 @@ class TestHealth:
         res = client.get("/api/health")
         assert res.status_code == 200
         assert res.json()["status"] == "ok"
+
+
+class TestChatExport:
+    """Chat export endpoint tests."""
+
+    def test_chat_export_markdown(self, client, auth_headers):
+        res = client.get("/api/chat/export?format=markdown", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["format"] == "markdown"
+        assert "# RAGkb Export Report" in data["content"]
+
+    def test_chat_export_json(self, client, auth_headers):
+        res = client.get("/api/chat/export?format=json", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "ready_documents_count" in data
+        assert "documents" in data
+

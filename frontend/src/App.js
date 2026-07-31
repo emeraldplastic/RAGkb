@@ -555,6 +555,28 @@ function MainApp({ user, onLogout }) {
     return `${doc.pages} pages - ${formatSize(doc.size)}`;
   };
 
+  const handleExportChat = async (format = "markdown") => {
+    try {
+      const res = await api.get(`/api/chat/export?format=${format}`);
+      const content = format === "json" ? JSON.stringify(res.data, null, 2) : (res.data.content || "");
+      const blob = new Blob([content], {
+        type: format === "json" ? "application/json" : "text/markdown",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ragkb-export.${format === "json" ? "json" : "md"}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMenuOpen(false);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "system", text: formatApiError(err, "Export failed."), error: true },
+      ]);
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -644,6 +666,12 @@ function MainApp({ user, onLogout }) {
           </button>
           {menuOpen && (
             <div className="user-dropdown">
+              <button type="button" onClick={() => handleExportChat("markdown")}>
+                Export KB (Markdown)
+              </button>
+              <button type="button" onClick={() => handleExportChat("json")}>
+                Export KB (JSON)
+              </button>
               <button type="button" onClick={onLogout}>
                 Sign out
               </button>
@@ -653,6 +681,7 @@ function MainApp({ user, onLogout }) {
             </div>
           )}
         </div>
+
       </aside>
 
       <main className="chat-pane">
