@@ -140,6 +140,13 @@ def list_documents(user: dict = Depends(get_current_user)):
     return {"documents": [serialize_document(d) for d in docs]}
 
 
+@router.get("/documents/stats")
+def get_document_stats(user: dict = Depends(get_current_user)):
+    """Get document statistics for the authenticated user."""
+    stats = db.get_user_document_stats(user["id"])
+    return stats
+
+
 @router.get("/documents/{doc_id}")
 def get_document_info(doc_id: int, user: dict = Depends(get_current_user)):
     doc = db.get_document(doc_id, user["id"])

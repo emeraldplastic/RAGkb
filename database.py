@@ -249,3 +249,47 @@ def delete_user(user_id: int) -> bool:
     conn.commit()
     conn.close()
     return deleted
+
+
+def get_user_document_stats(user_id: int) -> dict:
+    """Get document statistics for a specific user.
+    
+    Returns:
+        dict: {
+            "total_documents": int,
+            "status_counts": {"ready": int, "processing": int, "failed": int, "queued": int},
+            "total_storage_bytes": int
+        }
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get total documents and storage
+    cursor.execute(
+        "SELECT COUNT(*) as total, SUM(file_size) as storage FROM documents WHERE user_id = ?",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    total_documents = row["total"] or 0
+    total_storage_bytes = row["storage"] or 0
+    
+    # Get status counts
+    cursor.execute(
+        "SELECT status, COUNT(*) as count FROM documents WHERE user_id = ? GROUP BY status",
+        (user_id,)
+    )
+    status_rows = cursor.fetchall()
+    status_counts = {r["status"]: r["count"] for r in status_rows}
+    
+    # Ensure all expected statuses are present
+    for status in ["ready", "processing", "failed", "queued"]:
+        if status not in status_counts:
+            status_counts[status] = 0
+    
+    conn.close()
+    
+    return {
+        "total_documents": total_documents,
+        "status_counts": status_counts,
+        "total_storage_bytes": total_storage_bytes
+    }

@@ -251,3 +251,37 @@ class TestChatExport:
         assert "ready_documents_count" in data
         assert "documents" in data
 
+
+class TestDocumentStats:
+    """Document statistics endpoint tests."""
+
+    def test_get_document_stats_empty(self, client, auth_headers):
+        res = client.get("/api/documents/stats", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total_documents"] == 0
+        assert "status_counts" in data
+        assert data["status_counts"]["ready"] == 0
+        assert data["status_counts"]["processing"] == 0
+        assert data["status_counts"]["failed"] == 0
+        assert data["status_counts"]["queued"] == 0
+        assert data["total_storage_bytes"] == 0
+
+    def test_get_document_stats_after_upload(self, client, auth_headers):
+        # Upload a document
+        content = b"Test document for stats."
+        files = {"file": ("stats_test.txt", io.BytesIO(content), "text/plain")}
+        client.post("/api/upload", headers=auth_headers, files=files)
+
+        # Get stats
+        res = client.get("/api/documents/stats", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total_documents"] >= 1
+        assert "status_counts" in data
+        assert data["total_storage_bytes"] > 0
+
+    def test_get_document_stats_without_auth(self, client):
+        res = client.get("/api/documents/stats")
+        assert res.status_code == 401
+
