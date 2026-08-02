@@ -8,6 +8,7 @@ RAGkb is a private document Q&A app with a FastAPI backend, React frontend, per-
 - Per-user SQLite metadata, upload folders, and Chroma collections
 - PDF, TXT, and Markdown ingestion with queued processing status
 - Streaming chat responses with visible source references
+- Semantic document search endpoint with per-chunk source confidence scoring
 - Strict API no-store responses, security headers, trusted hosts, and rate limits
 - Account and document deletion endpoints
 - Vercel deployment configuration

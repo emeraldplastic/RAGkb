@@ -5,6 +5,12 @@ All notable changes to RAGkb will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Semantic document search endpoint (`GET /api/documents/search`) returning relevant chunks with source and confidence, scoped per user
+- Test isolation fix for vector store cache in the test fixture
+
 ## [1.0.0] - 2025-01-01
 
 ### Added

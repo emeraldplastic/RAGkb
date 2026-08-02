@@ -285,3 +285,63 @@ class TestDocumentStats:
         res = client.get("/api/documents/stats")
         assert res.status_code == 401
 
+
+class TestDocumentSearch:
+    """Document semantic search endpoint tests."""
+
+    def test_search_requires_auth(self, client):
+        res = client.get("/api/documents/search", params={"q": "python"})
+        assert res.status_code == 401
+
+    def test_search_short_query_rejected(self, client, auth_headers):
+        res = client.get("/api/documents/search", params={"q": "a"}, headers=auth_headers)
+        assert res.status_code == 400
+
+    def test_search_invalid_limit_rejected(self, client, auth_headers):
+        res = client.get(
+            "/api/documents/search",
+            params={"q": "python", "limit": 50},
+            headers=auth_headers,
+        )
+        assert res.status_code == 400
+
+    def test_search_empty_without_documents(self, client, auth_headers):
+        res = client.get("/api/documents/search", params={"q": "python"}, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["query"] == "python"
+        assert data["count"] == 0
+        assert data["results"] == []
+
+    def test_search_returns_matches_after_upload(self, client, auth_headers):
+        content = b"Python is a programming language. React is a UI library. SQL is used for databases."
+        files = {"file": ("knowledge.txt", io.BytesIO(content), "text/plain")}
+        res = client.post("/api/upload", headers=auth_headers, files=files)
+        assert res.status_code == 200
+
+        res = client.get(
+            "/api/documents/search",
+            params={"q": "python"},
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["count"] >= 1
+        hit = data["results"][0]
+        assert "content" in hit
+        assert "confidence" in hit
+        assert hit["document"] == "knowledge.txt"
+
+    def test_search_is_scoped_to_current_user(self, client, auth_headers, second_user_headers):
+        content = b"Private notes about the RAG architecture."
+        files = {"file": ("private.txt", io.BytesIO(content), "text/plain")}
+        client.post("/api/upload", headers=auth_headers, files=files)
+
+        res = client.get(
+            "/api/documents/search",
+            params={"q": "architecture"},
+            headers=second_user_headers,
+        )
+        assert res.status_code == 200
+        assert res.json()["count"] == 0
+

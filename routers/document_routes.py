@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Re
 
 import database as db
 from auth import get_current_user
+from config import MAX_QUESTION_CHARS, MIN_RELEVANCE_SCORE
 from serializers import serialize_document
 from services.file_service import (
     delete_local_file,
@@ -22,7 +23,12 @@ from services.file_service import (
     validate_file_extension,
     _verify_magic_bytes,
 )
-from services.rag_service import get_embeddings_client, get_user_db, text_splitter
+from services.rag_service import (
+    get_embeddings_client,
+    get_user_db,
+    normalize_relevance_score,
+    text_splitter,
+)
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -145,6 +151,49 @@ def get_document_stats(user: dict = Depends(get_current_user)):
     """Get document statistics for the authenticated user."""
     stats = db.get_user_document_stats(user["id"])
     return stats
+
+
+@router.get("/documents/search")
+def search_documents(
+    q: str,
+    limit: int = 10,
+    user: dict = Depends(get_current_user),
+):
+    """Semantic search across the user's ingested documents.
+
+    Queries the per-user vector store and returns the most relevant chunks
+    with their source document and confidence score.
+    """
+    question = (q or "").strip()
+    if len(question) < 2:
+        raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
+    if len(question) > MAX_QUESTION_CHARS:
+        raise HTTPException(status_code=400, detail="Search query is too long")
+    if limit < 1 or limit > 20:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 20")
+
+    try:
+        user_db = get_user_db(user["id"])
+        matches = user_db.similarity_search_with_relevance_scores(question, k=limit)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Vector search is temporarily unavailable")
+
+    results = []
+    for doc, raw_score in matches:
+        score = normalize_relevance_score(raw_score)
+        if score < MIN_RELEVANCE_SCORE:
+            continue
+        results.append(
+            {
+                "content": doc.page_content.strip(),
+                "document": doc.metadata.get("original_name", "unknown"),
+                "stored_filename": doc.metadata.get("stored_filename"),
+                "page": doc.metadata.get("page", ""),
+                "confidence": round(score, 3),
+            }
+        )
+
+    return {"query": question, "count": len(results), "results": results}
 
 
 @router.get("/documents/{doc_id}")

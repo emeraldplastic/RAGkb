@@ -73,6 +73,14 @@ def client(setup_test_env):
     import main
     importlib.reload(main)
 
+    # Rebind router-level references so they use the freshly reloaded
+    # embeddings mock and vector store cache. Without this, the routers
+    # keep pointing at the pre-reload get_user_db whose lru_cache leaks
+    # Chroma instances across tests.
+    from routers import chat_routes, document_routes
+    document_routes.get_user_db = rag_service.get_user_db
+    chat_routes.get_user_db = rag_service.get_user_db
+
     from starlette.testclient import TestClient
     yield TestClient(main.app)
 
